@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	vlc "github.com/adrg/libvlc-go/v3"
+	"github.com/gen2brain/beeep"
 	"io/fs"
 	"log"
 	"os"
@@ -77,25 +78,55 @@ func main() {
 	// Register the media end reached event with the event manager.
 	quit := make(chan struct{})
 	eventCallback := func(event vlc.Event, userData interface{}) {
-		close(quit)
+		switch event {
+		case vlc.MediaListPlayerPlayed:
+			close(quit)
+		case vlc.MediaListPlayerNextItemSet:
+			// Retrieve underlying player.
+			p, err := player.Player()
+			if err != nil {
+				log.Println(err)
+				break
+			}
+
+			// Retrieve currently playing media.
+			media, err := p.Media()
+			if err != nil {
+				log.Println(err)
+				break
+			}
+
+			song, e := media.Meta(vlc.MediaTitle)
+			if e != nil {
+				log.Println(e)
+				break
+			}
+
+			/* Get media location.
+			location, err := media.Location()
+			if err != nil {
+				log.Println(err)
+				break
+			}*/
+			log.Println("Next up:", song)
+			if err := beeep.Notify("Next up", song, "assets/information.png"); err != nil {
+				log.Fatal(err)
+			}
+
+		default:
+			fmt.Printf("Event(%s) data=%+v\n", event, userData)
+		}
 	}
 
-	eventID, err := manager.Attach(vlc.MediaListPlayerPlayed, eventCallback, nil)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer manager.Detach(eventID)
-
-	// Show song we're playing
-	{
-		_, err := manager.Attach(vlc.MediaPlayerPlaying, func(event vlc.Event, userData interface{}) {
-			fmt.Printf("%+v\n", userData)
-		}, nil)
+	var eventIDs []vlc.EventID
+	for _, event := range []vlc.Event{vlc.MediaListPlayerPlayed, vlc.MediaListPlayerNextItemSet} {
+		eventID, err := manager.Attach(event, eventCallback, nil)
 		if err != nil {
 			log.Fatal(err)
 		}
-		// todo defer manager.Detach(eventID)
+		eventIDs = append(eventIDs, eventID)
 	}
+	defer manager.Detach(eventIDs...)
 
 	if err := player.SetPlaybackMode(vlc.Loop); err != nil {
 		log.Fatal(err)
@@ -120,12 +151,10 @@ func main() {
 				if err := player.PlayNext(); err != nil {
 					log.Fatal(err)
 				}
-				fmt.Printf("Next\n")
 			} else if cmd == "p" {
 				if err := player.PlayPrevious(); err != nil {
 					log.Fatal(err)
 				}
-				fmt.Printf("Prev\n")
 			} else if cmd == "t" {
 				if err := player.TogglePause(); err != nil {
 					log.Fatal(err)
