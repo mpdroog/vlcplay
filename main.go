@@ -2,17 +2,30 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	vlc "github.com/adrg/libvlc-go/v3"
 	"github.com/gen2brain/beeep"
 	"io/fs"
 	"log"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
+func remove(s []string, i int) []string {
+	s[i] = s[len(s)-1]
+	return s[:len(s)-1]
+}
+
 func main() {
+	verbose := false
+	path := ""
+	flag.StringVar(&path, "p", "/Volumes/MPExtern/Music", "Music folder")
+	flag.BoolVar(&verbose, "v", false, "Increase verbosity")
+	flag.Parse()
+
 	// Initialize libVLC. Additional command line arguments can be passed in
 	// to libVLC by specifying them in the Init function.
 	if err := vlc.Init("--no-video", "--quiet"); err != nil {
@@ -37,28 +50,52 @@ func main() {
 	}
 	defer list.Release()
 
-	songs := make(map[string]struct{})
-	if e := filepath.WalkDir("/Volumes/MPExtern/Music", func(s string, d fs.DirEntry, err error) error {
+	songs := []string{}
+	if e := filepath.WalkDir(path, func(s string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
 			return nil
 		}
-		if !strings.HasSuffix(s, ".mp4") {
+		if strings.HasPrefix(s, "._") {
+			// ignore ._ files (meta?)
+			return nil
+		}
+		if !strings.HasSuffix(s, ".mp4") && !strings.HasSuffix(s, ".webm") {
+			// Only add playable music/video files
 			return nil
 		}
 
-		//fmt.Printf("Read %s\n", s)
-		songs[s] = struct{}{}
+		if verbose {
+			fmt.Printf("[sync] Read %s\n", s)
+		}
+		songs = append(songs, s)
 		return nil
 
 	}); e != nil {
 		log.Fatal(e)
 	}
+	if verbose {
+		fmt.Printf("song.count=%d\n", len(songs))
+	}
+
+	// Throw in some random as ranging over map is not random enough
+	songsNext := make(map[string]struct{})
+	for i := len(songs); i > 0; i-- {
+		// pick random
+		k := rand.Intn(len(songs))
+		song := songs[k]
+
+		songsNext[song] = struct{}{}
+		if verbose {
+			fmt.Printf("[random] %s\n", song)
+		}
+		songs = remove(songs, k)
+	}
 
 	// Add in second range by 'abusing' random behaviour of map
-	for song, _ := range songs {
+	for song, _ := range songsNext {
 		if err := list.AddMediaFromPath(song); err != nil {
 			log.Fatal(err)
 		}
@@ -74,6 +111,9 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	// remember currently played song (for deleting with 'r')
+	lastFile := ""
 
 	// Register the media end reached event with the event manager.
 	quit := make(chan struct{})
@@ -102,12 +142,14 @@ func main() {
 				break
 			}
 
-			/* Get media location.
+			/* Get media location.*/
 			location, err := media.Location()
 			if err != nil {
 				log.Println(err)
 				break
-			}*/
+			}
+			lastFile = location
+
 			log.Println("Next up:", song)
 			if err := beeep.Notify("Next up", song, "assets/information.png"); err != nil {
 				log.Fatal(err)
@@ -138,7 +180,7 @@ func main() {
 	}
 
 	go func() {
-		cmds := map[string]string{"n": "Next song", "p": "previous song", "t": "Pause or resume"}
+		cmds := map[string]string{"n": "Next song", "p": "previous song", "t": "Pause or resume", "r": "Remove song"}
 		for {
 			reader := bufio.NewReader(os.Stdin)
 			line, e := reader.ReadString('\n')
@@ -160,6 +202,15 @@ func main() {
 					log.Fatal(err)
 				}
 				fmt.Printf("Toggle pause\n")
+			} else if cmd == "r" {
+				fname := lastFile
+				if err := player.PlayNext(); err != nil {
+					log.Fatal(err)
+				}
+				if e := os.Remove(fname); e != nil {
+					log.Fatal(e)
+				}
+				fmt.Printf("Removed %s\n", fname)
 			} else {
 				fmt.Printf("Unsupported cmd, possible=\n")
 				fmt.Printf("%+v\n", cmds)
