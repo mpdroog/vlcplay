@@ -5,13 +5,14 @@ import (
 	"flag"
 	"fmt"
 	vlc "github.com/adrg/libvlc-go/v3"
-	"github.com/gen2brain/beeep"
+	"errors"
 	"io/fs"
 	"log"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func remove(s []string, i int) []string {
@@ -21,9 +22,11 @@ func remove(s []string, i int) []string {
 
 func main() {
 	verbose := false
+	wait := false
 	path := ""
 	flag.StringVar(&path, "p", "/Volumes/MPExtern/Music", "Music folder")
 	flag.BoolVar(&verbose, "v", false, "Increase verbosity")
+	flag.BoolVar(&wait, "r", true, "Retry every 5sec if path is available")
 	flag.Parse()
 
 	// Initialize libVLC. Additional command line arguments can be passed in
@@ -49,6 +52,23 @@ func main() {
 		log.Fatal(err)
 	}
 	defer list.Release()
+
+	if wait {
+		for {
+			_, e := os.Stat(path)
+			if errors.Is(e, os.ErrNotExist) {
+				fmt.Printf("file[%s] not ready..\n", path)
+				time.Sleep(time.Second * 5)
+				continue
+			}
+			if e != nil {
+				log.Fatal(e)
+			}
+
+			// file exists
+			break
+		}
+	}
 
 	songs := []string{}
 	if e := filepath.WalkDir(path, func(s string, d fs.DirEntry, err error) error {
@@ -150,10 +170,12 @@ func main() {
 			}
 			lastFile = location
 
-			log.Println("Next up:", song)
-			if err := beeep.Notify("Next up", song, "assets/information.png"); err != nil {
-				log.Fatal(err)
-			}
+			title := song
+			title = strings.ReplaceAll(title, ".mp4", "")
+			title = strings.ReplaceAll(title, ".webm", "")
+
+			fmt.Printf("\033]1;" + title + " \007")
+			log.Println("Now playing:", title)
 
 		default:
 			fmt.Printf("Event(%s) data=%+v\n", event, userData)
